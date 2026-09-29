@@ -1,0 +1,57 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Node.js
+node_modules/
+dist/
+build/
+coverage/
+
+# Vite
+.vite/
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Secrets / Certificates
+*.pem
+*.key
+*.crt
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
