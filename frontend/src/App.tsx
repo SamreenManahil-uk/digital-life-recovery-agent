@@ -43,6 +43,7 @@ import {
   getSinglePointsOfFailure,
 } from "./api/graph";
 import { getRecoveryMethods } from "./api/recoveryMethods";
+import { getIncidents } from "./api/incidents";
 
 type AppPage =
   | "command-center"
@@ -73,7 +74,6 @@ const navItems = [
     id: "incidents" as AppPage,
     label: "Incidents",
     icon: TriangleAlert,
-    badge: "2",
   },
   {
     id: "recovery" as AppPage,
@@ -85,9 +85,11 @@ const navItems = [
 function Sidebar({
   activePage,
   onNavigate,
+  incidentCount,
 }: {
   activePage: AppPage;
   onNavigate: (page: AppPage) => void;
+  incidentCount: number;
 }) {
   return (
     <aside className="desktop-sidebar fixed bottom-5 left-5 top-5 z-30 w-[252px]">
@@ -147,11 +149,12 @@ function Sidebar({
                     {item.label}
                   </span>
 
-                  {item.badge && (
-                    <span className="rounded-full border border-rose-300/10 bg-rose-400/10 px-2 py-0.5 text-[10px] font-bold text-rose-200">
-                      {item.badge}
-                    </span>
-                  )}
+                  {item.id === "incidents" &&
+                    incidentCount > 0 && (
+                      <span className="rounded-full border border-rose-300/10 bg-rose-400/10 px-2 py-0.5 text-[10px] font-bold text-rose-200">
+                        {incidentCount}
+                      </span>
+                    )}
                 </button>
               );
             })}
@@ -554,6 +557,9 @@ function App() {
   const [recentActivityLoading, setRecentActivityLoading] =
     useState(true);
 
+  const [incidentCount, setIncidentCount] =
+    useState(0);
+
   const [activePage, setActivePage] =
     useState<AppPage>("command-center");
 
@@ -630,6 +636,40 @@ function App() {
     }
 
     void loadDashboardMetrics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, activePage]);
+
+  useEffect(() => {
+    if (!user) {
+      setIncidentCount(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadIncidentCount() {
+      try {
+        const incidents = await getIncidents();
+
+        if (!cancelled) {
+          setIncidentCount(incidents.length);
+        }
+      } catch (error) {
+        console.error(
+          "Failed to load incident count:",
+          error,
+        );
+
+        if (!cancelled) {
+          setIncidentCount(0);
+        }
+      }
+    }
+
+    void loadIncidentCount();
 
     return () => {
       cancelled = true;
@@ -729,6 +769,7 @@ function App() {
       <Sidebar
         activePage={activePage}
         onNavigate={setActivePage}
+        incidentCount={incidentCount}
       />
 
       <main className="main-offset ml-[282px] min-h-screen px-5 pb-8 pt-5 lg:px-8">
