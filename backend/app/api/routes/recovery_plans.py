@@ -16,6 +16,7 @@ from app.api.dependencies import (
     require_current_user,
 )
 from app.models.incident import Incident
+from app.models.audit_event import AuditEventType
 from app.models.recovery_action import (
     RecoveryAction,
     RecoveryActionStatus,
@@ -32,6 +33,7 @@ from app.schemas.recovery_plan import (
 from app.services.recovery_plan_generator import (
     generate_recovery_plan,
 )
+from app.services.audit_service import record_audit_event
 
 
 router = APIRouter(
@@ -271,6 +273,7 @@ def update_recovery_action(
     )
 
     now = datetime.now(timezone.utc)
+    previous_status = action.status
 
     action.status = payload.status
 
@@ -342,6 +345,78 @@ def update_recovery_action(
 
     else:
         plan.status = RecoveryPlanStatus.READY
+
+    if (
+        payload.status == RecoveryActionStatus.IN_PROGRESS
+        and previous_status != RecoveryActionStatus.IN_PROGRESS
+    ):
+        record_audit_event(
+            db=db,
+            user_id=user_id,
+            event_type=AuditEventType.RECOVERY_ACTION_STARTED,
+            entity_type="recovery_action",
+            entity_id=action.id,
+            action="Started recovery action",
+            description=f"Started recovery action: {action.title}.",
+            metadata={
+                "recovery_plan_id": str(plan.id),
+                "service_account_id": (
+                    str(action.service_account_id)
+                    if action.service_account_id
+                    else None
+                ),
+                "previous_status": previous_status.value,
+                "new_status": payload.status.value,
+            },
+        )
+
+    elif (
+        payload.status == RecoveryActionStatus.COMPLETED
+        and previous_status != RecoveryActionStatus.COMPLETED
+    ):
+        record_audit_event(
+            db=db,
+            user_id=user_id,
+            event_type=AuditEventType.RECOVERY_ACTION_COMPLETED,
+            entity_type="recovery_action",
+            entity_id=action.id,
+            action="Completed recovery action",
+            description=f"Completed recovery action: {action.title}.",
+            metadata={
+                "recovery_plan_id": str(plan.id),
+                "service_account_id": (
+                    str(action.service_account_id)
+                    if action.service_account_id
+                    else None
+                ),
+                "previous_status": previous_status.value,
+                "new_status": payload.status.value,
+            },
+        )
+
+    elif (
+        payload.status == RecoveryActionStatus.FAILED
+        and previous_status != RecoveryActionStatus.FAILED
+    ):
+        record_audit_event(
+            db=db,
+            user_id=user_id,
+            event_type=AuditEventType.RECOVERY_ACTION_FAILED,
+            entity_type="recovery_action",
+            entity_id=action.id,
+            action="Recovery action failed",
+            description=f"Recovery action failed: {action.title}.",
+            metadata={
+                "recovery_plan_id": str(plan.id),
+                "service_account_id": (
+                    str(action.service_account_id)
+                    if action.service_account_id
+                    else None
+                ),
+                "previous_status": previous_status.value,
+                "new_status": payload.status.value,
+            },
+        )
 
     db.commit()
     db.refresh(action)

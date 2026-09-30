@@ -419,6 +419,10 @@ export default function RecoveryPage() {
           actions,
         };
       });
+
+      if (selectedIncidentId) {
+        await loadPlan(selectedIncidentId);
+      }
     } catch (requestError) {
       setError(
         getErrorMessage(
