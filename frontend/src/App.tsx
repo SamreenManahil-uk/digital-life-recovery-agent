@@ -5,11 +5,9 @@ import {
   ChevronRight,
   CircleUserRound,
   Command,
-  GitBranch,
   KeyRound,
   LayoutDashboard,
   LifeBuoy,
-  LockKeyhole,
   Menu,
   MoreHorizontal,
   Network,
@@ -35,6 +33,16 @@ import IncidentsPage from "./pages/IncidentsPage";
 import RecoveryPage from "./pages/RecoveryPage";
 import RecoveryMethodsPage from "./pages/RecoveryMethodsPage";
 import ActivityPage from "./pages/ActivityPage";
+import {
+  getAuditEvents,
+  type AuditEvent,
+} from "./api/audit";
+import { getServices } from "./api/services";
+import {
+  getGraph,
+  getSinglePointsOfFailure,
+} from "./api/graph";
+import { getRecoveryMethods } from "./api/recoveryMethods";
 
 type AppPage =
   | "command-center"
@@ -307,7 +315,22 @@ function MetricCard({
   );
 }
 
-function RiskPanel() {
+function RiskPanel({
+  singlePoints,
+  recoveryMethods,
+  verifiedRecoveryMethods,
+}: {
+  singlePoints: number;
+  recoveryMethods: number;
+  verifiedRecoveryMethods: number;
+}) {
+  const recoveryCoverage =
+    recoveryMethods === 0
+      ? 0
+      : Math.round(
+          (verifiedRecoveryMethods / recoveryMethods) * 100,
+        );
+
   return (
     <div className="glass rounded-[28px] p-5">
       <div className="flex items-start justify-between">
@@ -332,11 +355,11 @@ function RiskPanel() {
               Single points of failure
             </span>
             <span className="text-[18px] font-semibold text-rose-200">
-              3
+              {singlePoints}
             </span>
           </div>
           <div className="mt-1 text-[10px] text-white/28">
-            Services without independent recovery
+            Assets with downstream dependency exposure
           </div>
         </div>
 
@@ -346,14 +369,16 @@ function RiskPanel() {
               Recovery coverage
             </span>
             <span className="text-[12px] font-bold text-emerald-200/75">
-              78%
+              {recoveryCoverage}%
             </span>
           </div>
 
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[.05]">
             <motion.div
               initial={{ width: 0 }}
-              animate={{ width: "78%" }}
+              animate={{
+                width: `${recoveryCoverage}%`,
+              }}
               transition={{ duration: 1.2, delay: 0.7 }}
               className="h-full rounded-full bg-gradient-to-r from-violet-400/80 to-cyan-300/80"
             />
@@ -364,25 +389,70 @@ function RiskPanel() {
   );
 }
 
-function ActivityPanel() {
-  const activity = [
-    {
-      icon: ShieldCheck,
-      title: "Recovery method verified",
-      detail: "Gmail · 12 minutes ago",
-    },
-    {
-      icon: GitBranch,
-      title: "Dependency updated",
-      detail: "GitHub → Vercel · 1 hour ago",
-    },
-    {
-      icon: LockKeyhole,
-      title: "Security analysis complete",
-      detail: "5 services analyzed · Today",
-    },
-  ];
+function dashboardActivityTitle(
+  event: AuditEvent,
+) {
+  if (event.description?.trim()) {
+    return event.description;
+  }
 
+  return event.action
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) =>
+      char.toUpperCase(),
+    );
+}
+
+function dashboardActivityTime(
+  date: string,
+) {
+  const timestamp = new Date(date).getTime();
+
+  if (Number.isNaN(timestamp)) {
+    return "Unknown time";
+  }
+
+  const seconds = Math.max(
+    0,
+    Math.floor(
+      (Date.now() - timestamp) / 1000,
+    ),
+  );
+
+  if (seconds < 60) {
+    return `${Math.max(seconds, 1)}s ago`;
+  }
+
+  const minutes = Math.floor(
+    seconds / 60,
+  );
+
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(
+    minutes / 60,
+  );
+
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  const days = Math.floor(
+    hours / 24,
+  );
+
+  return `${days}d ago`;
+}
+
+function ActivityPanel({
+  events,
+  loading,
+}: {
+  events: AuditEvent[];
+  loading: boolean;
+}) {
   return (
     <div className="glass rounded-[28px] p-5">
       <div className="flex items-center justify-between">
@@ -390,49 +460,99 @@ function ActivityPanel() {
           <div className="text-[10px] font-bold uppercase tracking-[.18em] text-white/25">
             Live intelligence
           </div>
+
           <h3 className="mt-2 font-[Manrope] text-[18px] font-semibold text-white/85">
             Recent activity
           </h3>
         </div>
 
-        <Activity size={17} className="text-violet-200/55" />
+        <Activity
+          size={17}
+          className="text-violet-200/55"
+        />
       </div>
 
       <div className="mt-5">
-        {activity.map((item, index) => {
-          const Icon = item.icon;
-
-          return (
+        {loading ? (
+          <div className="py-8 text-center text-[10px] text-white/25">
+            Loading recent activity...
+          </div>
+        ) : events.length === 0 ? (
+          <div className="py-8 text-center text-[10px] text-white/25">
+            No activity recorded yet.
+          </div>
+        ) : (
+          events.map((event, index) => (
             <div
-              key={item.title}
+              key={event.id}
               className={`flex gap-3 py-4 ${
-                index !== activity.length - 1
+                index !== events.length - 1
                   ? "border-b soft-divider"
                   : ""
               }`}
             >
               <div className="metric-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-xl">
-                <Icon size={15} className="text-white/55" />
+                <Activity
+                  size={15}
+                  className="text-white/55"
+                />
               </div>
 
-              <div>
-                <div className="text-[11px] font-bold text-white/65">
-                  {item.title}
+              <div className="min-w-0">
+                <div className="line-clamp-2 text-[11px] font-bold text-white/65">
+                  {dashboardActivityTitle(event)}
                 </div>
+
                 <div className="mt-1 text-[10px] text-white/25">
-                  {item.detail}
+                  {event.event_type
+                    .replaceAll("_", " ")
+                    .replace(/\b\w/g, (char) =>
+                      char.toUpperCase(),
+                    )}{" "}
+                  ·{" "}
+                  {dashboardActivityTime(
+                    event.created_at,
+                  )}
                 </div>
               </div>
             </div>
-          );
-        })}
+          ))
+        )}
       </div>
     </div>
   );
 }
 
+type DashboardMetrics = {
+  assets: number;
+  dependencies: number;
+  criticalDependencies: number;
+  recoveryMethods: number;
+  verifiedRecoveryMethods: number;
+  singlePoints: number;
+};
+
 function App() {
   const { user, loading, logout } = useAuth();
+
+  const [dashboardMetrics, setDashboardMetrics] =
+    useState<DashboardMetrics>({
+      assets: 0,
+      dependencies: 0,
+      criticalDependencies: 0,
+      recoveryMethods: 0,
+      verifiedRecoveryMethods: 0,
+      singlePoints: 0,
+    });
+
+  const [dashboardMetricsLoading, setDashboardMetricsLoading] =
+    useState(true);
+
+  const [recentActivity, setRecentActivity] =
+    useState<AuditEvent[]>([]);
+
+  const [recentActivityLoading, setRecentActivityLoading] =
+    useState(true);
 
   const [activePage, setActivePage] =
     useState<AppPage>("command-center");
@@ -458,6 +578,107 @@ function App() {
     useCallback(() => {
       setIncidentPhase("complete");
     }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setDashboardMetricsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadDashboardMetrics() {
+      setDashboardMetricsLoading(true);
+
+      try {
+        const [
+          services,
+          graph,
+          singlePointData,
+          recoveryMethods,
+        ] = await Promise.all([
+          getServices(),
+          getGraph(),
+          getSinglePointsOfFailure(),
+          getRecoveryMethods(),
+        ]);
+
+        if (cancelled) return;
+
+        setDashboardMetrics({
+          assets: services.length,
+          dependencies: graph.edge_count,
+          criticalDependencies: graph.edges.filter(
+            (edge) => edge.is_critical,
+          ).length,
+          recoveryMethods: recoveryMethods.length,
+          verifiedRecoveryMethods: recoveryMethods.filter(
+            (method) => method.is_verified,
+          ).length,
+          singlePoints: singlePointData.count,
+        });
+      } catch (error) {
+        console.error(
+          "Failed to load command center metrics:",
+          error,
+        );
+      } finally {
+        if (!cancelled) {
+          setDashboardMetricsLoading(false);
+        }
+      }
+    }
+
+    void loadDashboardMetrics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, activePage]);
+
+  useEffect(() => {
+    if (!user) {
+      setRecentActivity([]);
+      setRecentActivityLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadRecentActivity() {
+      setRecentActivityLoading(true);
+
+      try {
+        const events = await getAuditEvents({
+          limit: 3,
+          offset: 0,
+        });
+
+        if (!cancelled) {
+          setRecentActivity(events);
+        }
+      } catch (error) {
+        console.error(
+          "Failed to load recent activity:",
+          error,
+        );
+
+        if (!cancelled) {
+          setRecentActivity([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setRecentActivityLoading(false);
+        }
+      }
+    }
+
+    void loadRecentActivity();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, activePage]);
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
@@ -663,30 +884,50 @@ function App() {
           <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <MetricCard
               icon={Boxes}
-              value="12"
+              value={
+                dashboardMetricsLoading
+                  ? "—"
+                  : String(dashboardMetrics.assets)
+              }
               label="Digital assets"
-              detail="+2 this month"
+              detail="PostgreSQL inventory"
             />
 
             <MetricCard
               icon={Network}
-              value="18"
+              value={
+                dashboardMetricsLoading
+                  ? "—"
+                  : String(dashboardMetrics.dependencies)
+              }
               label="Dependencies"
-              detail="4 critical chains"
+              detail={`${dashboardMetrics.criticalDependencies} critical links`}
             />
 
             <MetricCard
               icon={ShieldCheck}
-              value="9"
-              label="Recovery paths"
-              detail="75% verified"
+              value={
+                dashboardMetricsLoading
+                  ? "—"
+                  : String(dashboardMetrics.recoveryMethods)
+              }
+              label="Recovery methods"
+              detail={`${dashboardMetrics.verifiedRecoveryMethods} verified`}
             />
 
             <MetricCard
               icon={TriangleAlert}
-              value="3"
+              value={
+                dashboardMetricsLoading
+                  ? "—"
+                  : String(dashboardMetrics.singlePoints)
+              }
               label="Single points"
-              detail="Need attention"
+              detail={
+                dashboardMetrics.singlePoints === 0
+                  ? "No failure points"
+                  : "Need attention"
+              }
             />
           </section>
 
@@ -697,7 +938,13 @@ function App() {
               onIncidentComplete={completeIncidentSimulation}
             />
 
-            <RiskPanel />
+            <RiskPanel
+              singlePoints={dashboardMetrics.singlePoints}
+              recoveryMethods={dashboardMetrics.recoveryMethods}
+              verifiedRecoveryMethods={
+                dashboardMetrics.verifiedRecoveryMethods
+              }
+            />
           </section>
 
           <section className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -714,45 +961,103 @@ function App() {
                 </div>
 
                 <span className="rounded-full border border-emerald-300/[.1] bg-emerald-300/[.055] px-3 py-1 text-[9px] font-bold uppercase tracking-[.12em] text-emerald-200/60">
-                  Improving
+                  {dashboardMetricsLoading
+                    ? "Loading"
+                    : dashboardMetrics.recoveryMethods === 0
+                      ? "Setup needed"
+                      : dashboardMetrics.verifiedRecoveryMethods ===
+                          dashboardMetrics.recoveryMethods &&
+                        dashboardMetrics.singlePoints === 0
+                        ? "Protected"
+                        : "Improving"}
                 </span>
               </div>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
                 {[
-                  ["Verified methods", "7 / 9", "78%"],
-                  ["Independent paths", "6", "67%"],
-                  ["Trusted devices", "3", "86%"],
-                ].map(([label, value, width]) => (
-                  <div
-                    key={label}
-                    className="rounded-[20px] border border-white/[.06] bg-white/[.025] p-4"
-                  >
-                    <div className="text-[10px] text-white/30">
-                      {label}
-                    </div>
+                  {
+                    label: "Verified methods",
+                    value: `${dashboardMetrics.verifiedRecoveryMethods} / ${dashboardMetrics.recoveryMethods}`,
+                    width:
+                      dashboardMetrics.recoveryMethods === 0
+                        ? "0%"
+                        : `${Math.round(
+                            (dashboardMetrics.verifiedRecoveryMethods /
+                              dashboardMetrics.recoveryMethods) *
+                              100,
+                          )}%`,
+                  },
+                  {
+                    label: "Recovery methods",
+                    value: String(
+                      dashboardMetrics.recoveryMethods,
+                    ),
+                    width:
+                      dashboardMetrics.recoveryMethods > 0
+                        ? "100%"
+                        : "0%",
+                  },
+                  {
+                    label: "Failure points",
+                    value: String(
+                      dashboardMetrics.singlePoints,
+                    ),
+                    width:
+                      dashboardMetrics.singlePoints === 0
+                        ? "100%"
+                        : `${Math.max(
+                            10,
+                            100 -
+                              dashboardMetrics.singlePoints *
+                                20,
+                          )}%`,
+                  },
+                ].map(
+                  ({
+                    label,
+                    value,
+                    width,
+                  }) => (
+                    <div
+                      key={label}
+                      className="rounded-[20px] border border-white/[.06] bg-white/[.025] p-4"
+                    >
+                      <div className="text-[10px] text-white/30">
+                        {label}
+                      </div>
 
-                    <div className="mt-2 font-[Manrope] text-[20px] font-semibold text-white/75">
-                      {value}
-                    </div>
+                      <div className="mt-2 font-[Manrope] text-[20px] font-semibold text-white/75">
+                        {dashboardMetricsLoading
+                          ? "—"
+                          : value}
+                      </div>
 
-                    <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/[.05]">
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{ width }}
-                        transition={{
-                          duration: 1,
-                          delay: 0.8,
-                        }}
-                        className="h-full rounded-full bg-gradient-to-r from-violet-400/75 to-cyan-300/70"
-                      />
+                      <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/[.05]">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{
+                            width:
+                              dashboardMetricsLoading
+                                ? "0%"
+                                : width,
+                          }}
+                          transition={{
+                            duration: 1,
+                            delay: 0.35,
+                          }}
+                          className="h-full rounded-full bg-gradient-to-r from-violet-400/75 to-cyan-300/70"
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             </div>
 
-            <ActivityPanel />
+            <ActivityPanel
+              events={recentActivity}
+              loading={recentActivityLoading}
+            />
           </section>
 
             </>
@@ -764,7 +1069,7 @@ function App() {
             </span>
 
             <span>
-              All systems operational
+              Live recovery intelligence
             </span>
           </footer>
         </div>

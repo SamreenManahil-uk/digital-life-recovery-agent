@@ -50,11 +50,20 @@ import {
 
 import { getServices } from "../api/services";
 
+import {
+  getGraph,
+  getGraphImpact,
+  getSinglePointsOfFailure,
+} from "../api/graph";
+
 import type {
   DependencyCreate,
   DependencyRelationship,
   DependencyType,
+  GraphImpactResponse,
+  GraphResponse,
   ServiceAccount,
+  SinglePointOfFailure,
 } from "../types";
 
 type GraphNodeData = {
@@ -554,6 +563,21 @@ export default function DependencyUniversePage() {
   const [dependencies, setDependencies] =
     useState<DependencyRelationship[]>([]);
 
+  const [neo4jGraph, setNeo4jGraph] =
+    useState<GraphResponse | null>(null);
+
+  const [singlePoints, setSinglePoints] =
+    useState<SinglePointOfFailure[]>([]);
+
+  const [selectedImpact, setSelectedImpact] =
+    useState<GraphImpactResponse | null>(null);
+
+  const [impactLoading, setImpactLoading] =
+    useState(false);
+
+  const [impactError, setImpactError] =
+    useState<string | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -565,13 +589,22 @@ export default function DependencyUniversePage() {
     setError(null);
 
     try {
-      const [serviceData, dependencyData] = await Promise.all([
+      const [
+        serviceData,
+        dependencyData,
+        graphData,
+        singlePointData,
+      ] = await Promise.all([
         getServices(),
         getDependencies(),
+        getGraph(),
+        getSinglePointsOfFailure(),
       ]);
 
       setServices(serviceData);
       setDependencies(dependencyData);
+      setNeo4jGraph(graphData);
+      setSinglePoints(singlePointData.items);
     } catch (requestError) {
       setError(getErrorMessage(requestError));
     } finally {
@@ -589,29 +622,26 @@ export default function DependencyUniversePage() {
   );
 
   const graphNodes = useMemo<Node<GraphNodeData>[]>(() => {
+    const nodes = neo4jGraph?.nodes ?? [];
+    const edges = neo4jGraph?.edges ?? [];
+
     const incoming = new Map<string, number>();
-    const outgoing = new Map<string, number>();
 
-    dependencies.forEach((dependency) => {
+    edges.forEach((edge) => {
       incoming.set(
-        dependency.target_service_id,
-        (incoming.get(dependency.target_service_id) ?? 0) + 1,
-      );
-
-      outgoing.set(
-        dependency.source_service_id,
-        (outgoing.get(dependency.source_service_id) ?? 0) + 1,
+        edge.target_service_id,
+        (incoming.get(edge.target_service_id) ?? 0) + 1,
       );
     });
 
     const levels = new Map<string, number>();
 
-    const roots = services.filter(
-      (service) => !incoming.has(service.id),
+    const roots = nodes.filter(
+      (node) => !incoming.has(node.id),
     );
 
-    const queue = roots.map((service) => ({
-      id: service.id,
+    const queue = roots.map((node) => ({
+      id: node.id,
       level: 0,
     }));
 
@@ -622,59 +652,62 @@ export default function DependencyUniversePage() {
 
       const previous = levels.get(current.id);
 
-      if (previous !== undefined && previous <= current.level) {
+      if (
+        previous !== undefined &&
+        previous <= current.level
+      ) {
         continue;
       }
 
       levels.set(current.id, current.level);
 
-      dependencies
+      edges
         .filter(
-          (dependency) =>
-            dependency.source_service_id === current.id,
+          (edge) =>
+            edge.source_service_id === current.id,
         )
-        .forEach((dependency) => {
+        .forEach((edge) => {
           queue.push({
-            id: dependency.target_service_id,
+            id: edge.target_service_id,
             level: current.level + 1,
           });
         });
     }
 
-    services.forEach((service) => {
-      if (!levels.has(service.id)) {
-        levels.set(service.id, 0);
+    nodes.forEach((node) => {
+      if (!levels.has(node.id)) {
+        levels.set(node.id, 0);
       }
     });
 
     const levelCounts = new Map<number, number>();
 
-    return services.map((service) => {
-      const level = levels.get(service.id) ?? 0;
+    return nodes.map((node) => {
+      const level = levels.get(node.id) ?? 0;
       const row = levelCounts.get(level) ?? 0;
 
       levelCounts.set(level, row + 1);
 
       return {
-        id: service.id,
+        id: node.id,
         type: "digitalAsset",
         position: {
           x: 70 + level * 270,
           y: 70 + row * 150,
         },
         data: {
-          label: service.name,
-          provider: service.provider,
-          criticality: service.criticality,
-          serviceType: service.service_type,
+          label: node.name,
+          provider: node.provider,
+          criticality: node.criticality,
+          serviceType: node.service_type,
         },
       };
     });
-  }, [services, dependencies]);
+  }, [neo4jGraph]);
 
   const graphEdges = useMemo<Edge[]>(
     () =>
-      dependencies.map((dependency) => ({
+      (neo4jGraph?.edges ?? []).map((dependency) => ({
         id: dependency.id,
         source: dependency.source_service_id,
         target: dependency.target_service_id,
@@ -707,19 +740,29 @@ export default function DependencyUniversePage() {
         labelBgPadding: [5, 3],
         labelBgBorderRadius: 6,
       })),
-    [dependencies],
+    [neo4jGraph],
   );
 
   const criticalDependencies = dependencies.filter(
     (dependency) => dependency.is_critical,
   ).length;
 
-  const connectedAssets = new Set(
-    dependencies.flatMap((dependency) => [
-      dependency.source_service_id,
-      dependency.target_service_id,
-    ]),
-  ).size;
+  async function analyseNodeImpact(
+    serviceId: string,
+  ) {
+    setImpactLoading(true);
+    setImpactError(null);
+
+    try {
+      const result = await getGraphImpact(serviceId);
+      setSelectedImpact(result);
+    } catch (requestError) {
+      setSelectedImpact(null);
+      setImpactError(getErrorMessage(requestError));
+    } finally {
+      setImpactLoading(false);
+    }
+  }
 
   async function removeDependency(
     dependency: DependencyRelationship,
@@ -739,10 +782,7 @@ export default function DependencyUniversePage() {
 
     try {
       await deleteDependency(dependency.id);
-
-      setDependencies((current) =>
-        current.filter((item) => item.id !== dependency.id),
-      );
+      await loadGraph();
     } catch (requestError) {
       window.alert(getErrorMessage(requestError));
     } finally {
@@ -799,10 +839,10 @@ export default function DependencyUniversePage() {
 
         <div className="relative mt-7 grid grid-cols-2 gap-3 lg:max-w-[760px] lg:grid-cols-4">
           {[
-            ["Assets", services.length],
-            ["Dependencies", dependencies.length],
+            ["Neo4j nodes", neo4jGraph?.node_count ?? 0],
+            ["Neo4j edges", neo4jGraph?.edge_count ?? 0],
             ["Critical links", criticalDependencies],
-            ["Connected assets", connectedAssets],
+            ["Failure points", singlePoints.length],
           ].map(([label, value]) => (
             <div
               key={String(label)}
@@ -860,6 +900,9 @@ export default function DependencyUniversePage() {
               nodes={graphNodes}
               edges={graphEdges}
               nodeTypes={nodeTypes}
+              onNodeClick={(_, node) =>
+                void analyseNodeImpact(node.id)
+              }
               fitView
               fitViewOptions={{
                 padding: 0.2,
@@ -902,13 +945,93 @@ export default function DependencyUniversePage() {
 
               <div className="mt-4 rounded-[16px] border border-violet-300/[.08] bg-violet-300/[.035] p-3">
                 <div className="text-[8px] font-bold uppercase tracking-[.12em] text-violet-100/35">
-                  Flagship cascade
+                  Neo4j blast radius
                 </div>
 
-                <div className="mt-2 text-[9px] leading-5 text-white/42">
-                  Phone → Gmail → GitHub → Vercel → Website
-                </div>
+                {impactLoading ? (
+                  <div className="mt-3 text-[9px] text-white/35">
+                    Analysing dependency paths...
+                  </div>
+                ) : impactError ? (
+                  <div className="mt-3 text-[9px] leading-4 text-rose-200/55">
+                    {impactError}
+                  </div>
+                ) : selectedImpact ? (
+                  <div className="mt-3">
+                    <div className="text-[11px] font-bold text-white/70">
+                      {selectedImpact.root_service_name}
+                    </div>
+
+                    <div className="mt-1 text-[8px] text-white/25">
+                      {selectedImpact.affected_service_count} downstream{" "}
+                      {selectedImpact.affected_service_count === 1
+                        ? "asset"
+                        : "assets"}{" "}
+                      affected
+                    </div>
+
+                    {selectedImpact.impacts.length === 0 ? (
+                      <div className="mt-3 rounded-xl border border-emerald-300/[.08] bg-emerald-300/[.035] p-3 text-[8px] leading-4 text-emerald-100/45">
+                        No downstream dependencies. Failure is contained
+                        to this asset.
+                      </div>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {selectedImpact.impacts.map((impact) => (
+                          <div
+                            key={impact.id}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-white/[.055] bg-black/[.08] px-3 py-2.5"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-[9px] font-bold text-white/55">
+                                {impact.name}
+                              </div>
+
+                              <div className="mt-1 text-[7px] uppercase tracking-[.08em] text-white/20">
+                                Dependency depth {impact.dependency_depth}
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 rounded-full border border-violet-300/[.08] bg-violet-300/[.04] px-2 py-1 text-[7px] font-bold text-violet-100/40">
+                              C{impact.criticality}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-[9px] leading-5 text-white/35">
+                    Click any asset in the graph to calculate its live
+                    cascading impact.
+                  </div>
+                )}
               </div>
+
+              {singlePoints.length > 0 && (
+                <div className="mt-3 rounded-[16px] border border-rose-300/[.07] bg-rose-300/[.025] p-3">
+                  <div className="text-[8px] font-bold uppercase tracking-[.12em] text-rose-100/35">
+                    Single points of failure
+                  </div>
+
+                  <div className="mt-2 space-y-1.5">
+                    {singlePoints.slice(0, 3).map((point) => (
+                      <div
+                        key={point.id}
+                        className="flex items-center justify-between gap-3 text-[8px]"
+                      >
+                        <span className="truncate text-white/38">
+                          {point.name}
+                        </span>
+
+                        <span className="shrink-0 text-rose-100/40">
+                          {point.downstream_count} downstream
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="rounded-[25px] border border-white/[.07] bg-white/[.02] p-5">
@@ -1011,13 +1134,9 @@ export default function DependencyUniversePage() {
           <DependencyDrawer
             services={services}
             onClose={() => setDrawerOpen(false)}
-            onCreated={(dependency) => {
-              setDependencies((current) => [
-                ...current,
-                dependency,
-              ]);
-
+            onCreated={() => {
               setDrawerOpen(false);
+              void loadGraph();
             }}
           />
         )}

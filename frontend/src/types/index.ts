@@ -114,3 +114,59 @@ export type IncidentAnalysis = {
   impacts: IncidentImpact[];
 };
 
+
+export type GraphNode = {
+  id: string;
+  name: string;
+  provider: string;
+  service_type: ServiceType;
+  criticality: number;
+  is_active: boolean;
+};
+
+export type GraphEdge = {
+  id: string;
+  source_service_id: string;
+  target_service_id: string;
+  relationship_type: DependencyType;
+  is_critical: boolean;
+};
+
+export type GraphResponse = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  node_count: number;
+  edge_count: number;
+};
+
+export type GraphImpactItem = {
+  id: string;
+  name: string;
+  criticality: number;
+  dependency_depth: number;
+};
+
+export type GraphImpactResponse = {
+  root_service_id: string;
+  root_service_name: string;
+  affected_service_count: number;
+  impacts: GraphImpactItem[];
+};
+
+export type SinglePointOfFailure = {
+  id: string;
+  name: string;
+  criticality: number;
+  downstream_count: number;
+};
+
+export type SinglePointsOfFailureResponse = {
+  count: number;
+  items: SinglePointOfFailure[];
+};
+
+export type GraphSyncResponse = {
+  status: string;
+  services: number;
+  dependencies: number;
+};
