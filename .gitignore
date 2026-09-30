@@ -55,3 +55,9 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+
+# Neo4j local runtime data
+infrastructure/neo4j/data/
+infrastructure/neo4j/logs/
+infrastructure/neo4j/plugins/
+infrastructure/neo4j/import/

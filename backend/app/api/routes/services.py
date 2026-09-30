@@ -16,7 +16,10 @@ from app.api.dependencies import (
 )
 from app.models.audit_event import AuditEventType
 from app.models.service_account import ServiceAccount
+from app.models.incident import Incident
+from app.models.incident_impact import IncidentImpact
 from app.services.audit_service import record_audit_event
+from app.services.neo4j_graph_service import try_sync_user_graph
 from app.schemas.service_account import (
     ServiceAccountCreate,
     ServiceAccountResponse,
@@ -75,6 +78,11 @@ def create_service(
 
     db.commit()
     db.refresh(service)
+
+    try_sync_user_graph(
+        db=db,
+        user_id=user_id,
+    )
 
     return service
 
@@ -189,6 +197,11 @@ def update_service(
     db.commit()
     db.refresh(service)
 
+    try_sync_user_graph(
+        db=db,
+        user_id=user_id,
+    )
+
     return service
 
 
@@ -219,6 +232,41 @@ def delete_service(
             detail="Service not found.",
         )
 
+    # --------------------------------------------------------
+    # Protect historical incident records
+    # --------------------------------------------------------
+
+    root_incident_reference = db.execute(
+        select(Incident.id)
+        .where(
+            Incident.user_id == user_id,
+            Incident.root_service_id == service_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+    impact_reference = db.execute(
+        select(IncidentImpact.id)
+        .where(
+            IncidentImpact.user_id == user_id,
+            IncidentImpact.service_account_id == service_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if (
+        root_incident_reference is not None
+        or impact_reference is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This digital asset cannot be deleted because "
+                "it is referenced by incident history. "
+                "Keep the asset for historical integrity."
+            ),
+        )
+
     service_id_for_audit = service.id
     service_name_for_audit = service.name
 
@@ -240,3 +288,8 @@ def delete_service(
     )
 
     db.commit()
+
+    try_sync_user_graph(
+        db=db,
+        user_id=user_id,
+    )

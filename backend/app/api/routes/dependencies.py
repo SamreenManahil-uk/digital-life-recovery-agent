@@ -25,6 +25,7 @@ from app.schemas.dependency_relationship import (
     DependencyRelationshipResponse,
 )
 from app.services.audit_service import record_audit_event
+from app.services.neo4j_graph_service import try_sync_user_graph
 
 
 router = APIRouter(
@@ -132,6 +133,11 @@ def create_dependency(
         )
 
         db.commit()
+
+        try_sync_user_graph(
+            db=db,
+            user_id=user_id,
+        )
 
     except IntegrityError as exc:
         db.rollback()
@@ -262,3 +268,8 @@ def delete_dependency(
     )
 
     db.commit()
+
+    try_sync_user_graph(
+        db=db,
+        user_id=user_id,
+    )
